@@ -1,62 +1,53 @@
-import os
+from http.server import BaseHTTPRequestHandler
 import json
+import os
 import requests
 
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 PROXY_SECRET = os.environ.get("PROXY_SECRET")
 
-def handler(event, context):
-    # Only POST allowed
-    if event.get('httpMethod') != 'POST':
-        return {
-            'statusCode': 405,
-            'body': json.dumps({"error": "Method not allowed"})
-        }
-    
-    # Parse body
+
+def forward_to_discord(payload):
+    if not DISCORD_WEBHOOK_URL:
+        return {"error": "Discord not configured"}, 500
     try:
-        body = json.loads(event.get('body', '{}'))
-    except Exception:
-        return {
-            'statusCode': 400,
-            'body': json.dumps({"error": "Invalid JSON"})
-        }
-    
-    # Authenticate
-    auth = event.get('headers', {}).get('x-proxy-secret')
-    if not auth or auth != PROXY_SECRET:
-        return {
-            'statusCode': 401,
-            'body': json.dumps({"error": "Unauthorized"})
-        }
-    
-    target = body.get('target')
-    payload = body.get('payload')
-    if not target or not payload:
-        return {
-            'statusCode': 400,
-            'body': json.dumps({"error": "Missing target or payload"})
-        }
-    
-    if target == 'discord':
-        if not DISCORD_WEBHOOK_URL:
-            return {
-                'statusCode': 500,
-                'body': json.dumps({"error": "Discord not configured"})
-            }
+        resp = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=30)
+        return {"status": "ok", "code": resp.status_code}, 200
+    except Exception as e:
+        return {"error": str(e)}, 500
+
+
+class handler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length)
+
         try:
-            resp = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=30)
-            return {
-                'statusCode': 200,
-                'body': json.dumps({"status": "ok", "code": resp.status_code})
-            }
-        except Exception as e:
-            return {
-                'statusCode': 500,
-                'body': json.dumps({"error": str(e)})
-            }
-    else:
-        return {
-            'statusCode': 400,
-            'body': json.dumps({"error": "Invalid target"})
-        }
+            data = json.loads(body)
+        except Exception:
+            self._send(400, {"error": "Invalid JSON"})
+            return
+
+        auth = self.headers.get("x-proxy-secret")
+        if not auth or auth != PROXY_SECRET:
+            self._send(401, {"error": "Unauthorized"})
+            return
+
+        target = data.get("target")
+        payload = data.get("payload")
+
+        if target == "discord":
+            result, status = forward_to_discord(payload)
+        else:
+            self._send(400, {"error": "Invalid target"})
+            return
+
+        self._send(status, result)
+
+    def _send(self, status, data):
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps(data).encode())
