@@ -1,9 +1,13 @@
-import os
+from http.server import BaseHTTPRequestHandler
 import json
+import os
 import requests
 
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 PROXY_SECRET = os.environ.get("PROXY_SECRET")
+
 
 def forward_to_discord(payload):
     if not DISCORD_WEBHOOK_URL:
@@ -14,41 +18,36 @@ def forward_to_discord(payload):
     except Exception as e:
         return {"error": str(e)}, 500
 
-def handler(event, context):
-    # Vercel calls this function
-    if event.get('httpMethod') != 'POST':
-        return {
-            'statusCode': 405,
-            'body': json.dumps({"error": "Method not allowed"})
-        }
-    
-    # Parse body
-    try:
-        body = json.loads(event.get('body', '{}'))
-    except Exception:
-        return {
-            'statusCode': 400,
-            'body': json.dumps({"error": "Invalid JSON"})
-        }
-    
-    # Auth header (Vercel lowercases headers)
-    auth = event.get('headers', {}).get('x-proxy-secret')
-    if not auth or auth != PROXY_SECRET:
-        return {
-            'statusCode': 401,
-            'body': json.dumps({"error": "Unauthorized"})
-        }
-    
-    target = body.get('target')
-    payload = body.get('payload')
-    if target != 'discord':
-        return {
-            'statusCode': 400,
-            'body': json.dumps({"error": "Invalid target"})
-        }
-    
-    result, status = forward_to_discord(payload)
-    return {
-        'statusCode': status,
-        'body': json.dumps(result)
-    }
+
+class handler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length)
+
+        try:
+            data = json.loads(body)
+        except Exception:
+            self._send(400, {"error": "Invalid JSON"})
+            return
+
+        auth = self.headers.get("x-proxy-secret")
+        if not auth or auth != PROXY_SECRET:
+            self._send(401, {"error": "Unauthorized"})
+            return
+
+        target = data.get("target")
+        payload = data.get("payload")
+
+        if target == "discord":
+            result, status = forward_to_discord(payload)
+        else:
+            self._send(400, {"error": "Invalid target"})
+            return
+
+        self._send(status, result)
+
+    def _send(self, status, data):
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(json.dumps(data).encode())
