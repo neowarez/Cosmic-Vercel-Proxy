@@ -5,17 +5,8 @@ import requests
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL")
 PROXY_SECRET = os.environ.get("PROXY_SECRET")
 
-def forward_to_discord(payload):
-    if not DISCORD_WEBHOOK_URL:
-        return {"error": "Discord not configured"}, 500
-    try:
-        resp = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=30)
-        return {"status": "ok", "code": resp.status_code}, 200
-    except Exception as e:
-        return {"error": str(e)}, 500
-
 def handler(event, context):
-    # Vercel calls this function
+    # Only POST allowed
     if event.get('httpMethod') != 'POST':
         return {
             'statusCode': 405,
@@ -31,7 +22,7 @@ def handler(event, context):
             'body': json.dumps({"error": "Invalid JSON"})
         }
     
-    # Auth header (Vercel lowercases headers)
+    # Authenticate
     auth = event.get('headers', {}).get('x-proxy-secret')
     if not auth or auth != PROXY_SECRET:
         return {
@@ -41,14 +32,31 @@ def handler(event, context):
     
     target = body.get('target')
     payload = body.get('payload')
-    if target != 'discord':
+    if not target or not payload:
+        return {
+            'statusCode': 400,
+            'body': json.dumps({"error": "Missing target or payload"})
+        }
+    
+    if target == 'discord':
+        if not DISCORD_WEBHOOK_URL:
+            return {
+                'statusCode': 500,
+                'body': json.dumps({"error": "Discord not configured"})
+            }
+        try:
+            resp = requests.post(DISCORD_WEBHOOK_URL, json=payload, timeout=30)
+            return {
+                'statusCode': 200,
+                'body': json.dumps({"status": "ok", "code": resp.status_code})
+            }
+        except Exception as e:
+            return {
+                'statusCode': 500,
+                'body': json.dumps({"error": str(e)})
+            }
+    else:
         return {
             'statusCode': 400,
             'body': json.dumps({"error": "Invalid target"})
         }
-    
-    result, status = forward_to_discord(payload)
-    return {
-        'statusCode': status,
-        'body': json.dumps(result)
-    }
