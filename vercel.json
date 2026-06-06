@@ -1,5 +1,8 @@
 {
-  "rewrites": [
-    { "source": "/api/exfil", "destination": "/api/exfil.py" }
+  "builds": [
+    {
+      "src": "api/**/*.py",
+      "use": "@vercel/python"
+    }
   ]
 }
